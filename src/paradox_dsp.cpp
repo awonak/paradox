@@ -35,17 +35,11 @@ uint32_t rng_state_                       = 0x6D2B79F5u;
 
 // Computed 8-voice `who is` FM index [0.0 .. 128.0] and raw hash offsets r in
 // [0, RnD)
-float who_FM_[kNumVoices]                   = {};
 float who_FM_target_[kNumVoices]            = {};
 float who_FM_curr_[kNumVoices]              = {};
 float who_hash_r_[kNumChannels][kNumVoices] = {};
 
 // Precomputed `it?he is` per-voice targets & audio-rate states
-float base_freq_[kNumVoices]             = {};
-float vca_gain_[kNumVoices]              = {};
-float rm_mix_[kNumVoices]                = {};
-float m_fm_weight_[kNumVoices]           = {};
-float m_rm_weight_[kNumVoices]           = {};
 float base_freq_target_[kNumVoices]      = {};
 float base_freq_curr_[kNumVoices]        = {};
 float vca_gain_target_[kNumVoices]       = {};
@@ -68,8 +62,6 @@ float  rev_dly_samples_target_l_[kNumVoices] = {};
 float  rev_dly_samples_target_r_[kNumVoices] = {};
 float  rev_dly_samples_curr_l_[kNumVoices]   = {};
 float  rev_dly_samples_curr_r_[kNumVoices]   = {};
-float  rev_fb_gain_l_[kNumVoices]            = {};
-float  rev_fb_gain_r_[kNumVoices]            = {};
 float  rev_fb_gain_target_l_[kNumVoices]     = {};
 float  rev_fb_gain_target_r_[kNumVoices]     = {};
 float  rev_fb_gain_curr_l_[kNumVoices]       = {};
@@ -81,8 +73,6 @@ float rev_hp_state_l_[kNumVoices] = {};
 float rev_lp_state_l_[kNumVoices] = {};
 float rev_hp_state_r_[kNumVoices] = {};
 float rev_lp_state_r_[kNumVoices] = {};
-float rev_hp_g_                   = 0.0f;
-float rev_lp_g_                   = 0.0f;
 float rev_hp_g_target_            = 0.0f;
 float rev_hp_g_curr_              = 0.0f;
 float rev_lp_g_target_            = 0.0f;
@@ -224,9 +214,6 @@ void RecomputeAllTargets(bool immediate) {
         const float who_rm = ComputeWhoIsVoice(
             v, tone_params_.rm_var, tone_params_.rm_rnd, ch_bs1_[kChRM],
             ch_bs2_[kChRM], &who_hash_r_[kChRM][v]);
-        who_FM_[v]        = ComputeWhoIsVoice(v, tone_params_.fm_var,
-                                              tone_params_.fm_rnd, ch_bs1_[kChFM],
-                                              ch_bs2_[kChFM], &who_hash_r_[kChFM][v]);
         who_FM_target_[v] = ComputeWhoIsVoice(
             v, tone_params_.fm_var, tone_params_.fm_rnd, ch_bs1_[kChFM],
             ch_bs2_[kChFM], &who_hash_r_[kChFM][v]);
@@ -237,12 +224,6 @@ void RecomputeAllTargets(bool immediate) {
             v, tone_params_.del_var, tone_params_.del_rnd, ch_bs1_[kChDEL],
             ch_bs2_[kChDEL], &who_hash_r_[kChDEL][v]);
 
-        float p_osc     = 2.0f * who_p - 128.0f;
-        base_freq_[v]   = ExpF32(p_osc);
-        vca_gain_[v]    = who_a / 16.0f;
-        rm_mix_[v]      = std::clamp(who_rm / 128.0f, 0.0f, 1.0f);
-        m_fm_weight_[v] = who_m / 2.0f;
-        m_rm_weight_[v] = who_m / 128.0f;
         float p_osc            = 2.0f * who_p - 128.0f;
         base_freq_target_[v]   = ExpF32(p_osc);
         vca_gain_target_[v]    = who_a / 16.0f;
@@ -272,12 +253,10 @@ void RecomputeAllTargets(bool immediate) {
 
     float fc_hp =
         std::clamp(ExpF32(rev_params_.hp), 0.01f, 0.49f * sample_rate_);
-    rev_hp_g_ = std::tan(kPi * fc_hp / sample_rate_);
     rev_hp_g_target_ = std::tan(kPi * fc_hp / sample_rate_);
 
     float fc_lp =
         std::clamp(ExpF32(rev_params_.lp), 0.01f, 0.49f * sample_rate_);
-    rev_lp_g_ = std::tan(kPi * fc_lp / sample_rate_);
     rev_lp_g_target_ = std::tan(kPi * fc_lp / sample_rate_);
 
     if (immediate) {
@@ -300,9 +279,6 @@ void RecomputeAllTargets(bool immediate) {
             rev_fb_gain_curr_l_[v]     = rev_fb_gain_target_l_[v];
             rev_fb_gain_curr_r_[v]     = rev_fb_gain_target_r_[v];
         }
-
-        rev_fb_gain_l_[v] = dec_lin / (dec_lin + tm_l_ms);
-        rev_fb_gain_r_[v] = dec_lin / (dec_lin + tm_r_ms);
     }
 
     ext_mix_target_ = std::clamp(rev_params_.mix, 0.0f, 1.0f);
@@ -462,18 +438,12 @@ void Process(daisy::AudioHandle::InputBuffer  in,
     const float smooth         = param_smooth_coeff_;
     const float peak_rel_coeff = peak_rel_coeff_;
 
-    const float rev_hp_g     = rev_hp_g_;
-    const float rev_hp_g_div = 1.0f / (1.0f + rev_hp_g);
-    const float rev_lp_g     = rev_lp_g_;
-    const float rev_lp_g_div = 1.0f / (1.0f + rev_lp_g);
-
     const float lvl_lp_g     = lvl_lp_g_;
     const float lvl_lp_g_div = lvl_lp_g_div_;
     const float lvl_hp_g     = lvl_hp_g_;
     const float lvl_hp_g_div = lvl_hp_g_div_;
 
     for (size_t i = 0; i < size; ++i) {
-        ext_mix_curr_ += 0.002f * (ext_mix_target_ - ext_mix_curr_);
         ext_mix_curr_  += smooth * (ext_mix_target_ - ext_mix_curr_);
         rev_hp_g_curr_ += smooth * (rev_hp_g_target_ - rev_hp_g_curr_);
         rev_lp_g_curr_ += smooth * (rev_lp_g_target_ - rev_lp_g_curr_);
@@ -487,8 +457,6 @@ void Process(daisy::AudioHandle::InputBuffer  in,
         float bus_fm = 0.0f;
         float bus_rm = 0.0f;
         for (size_t v = 0; v < kNumVoices; ++v) {
-            bus_fm += m_fm_weight_[v] * y_sat_prev_[v];
-            bus_rm += m_rm_weight_[v] * y_sat_prev_[v];
             m_fm_weight_curr_[v] +=
                 smooth * (m_fm_weight_target_[v] - m_fm_weight_curr_[v]);
             m_rm_weight_curr_[v] +=
@@ -506,11 +474,8 @@ void Process(daisy::AudioHandle::InputBuffer  in,
             vca_gain_curr_[v] +=
                 smooth * (vca_gain_target_[v] - vca_gain_curr_[v]);
             it_dly_samples_curr_[v] +=
-                0.002f * (it_dly_samples_target_[v] - it_dly_samples_curr_[v]);
                 smooth * (it_dly_samples_target_[v] - it_dly_samples_curr_[v]);
 
-            float f_inst = base_freq_[v] + who_FM_[v] * bus_fm;
-            float rm     = rm_mix_[v];
             float f_inst = base_freq_curr_[v] + who_FM_curr_[v] * bus_fm;
             float rm     = rm_mix_curr_[v];
             float a_inst = (1.0f - rm) + rm * bus_rm;
@@ -521,7 +486,6 @@ void Process(daisy::AudioHandle::InputBuffer  in,
             next_ph -= std::floor(next_ph);
             osc_phase_[v] = next_ph;
 
-            float y_vca = vca_gain_[v] * y_osc;
             float y_vca = vca_gain_curr_[v] * y_osc;
             dry_sum += y_vca;
 
@@ -549,11 +513,9 @@ void Process(daisy::AudioHandle::InputBuffer  in,
 
         for (size_t v = 0; v < kNumVoices; ++v) {
             rev_dly_samples_curr_l_[v] +=
-                0.002f *
                 smooth *
                 (rev_dly_samples_target_l_[v] - rev_dly_samples_curr_l_[v]);
             rev_dly_samples_curr_r_[v] +=
-                0.002f *
                 smooth *
                 (rev_dly_samples_target_r_[v] - rev_dly_samples_curr_r_[v]);
             rev_fb_gain_curr_l_[v] +=
@@ -572,8 +534,6 @@ void Process(daisy::AudioHandle::InputBuffer  in,
                                        rev_dly_samples_curr_r_[v]);
 
             // Cross-coupled feedback: Left receives fb_r, Right receives fb_l
-            float in_l = dry_in + rev_fb_gain_l_[v] * fb_r;
-            float in_r = dry_in + rev_fb_gain_r_[v] * fb_l;
             float in_l = dry_in + rev_fb_gain_curr_l_[v] * fb_r;
             float in_r = dry_in + rev_fb_gain_curr_r_[v] * fb_l;
 
